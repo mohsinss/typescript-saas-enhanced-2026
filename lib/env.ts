@@ -11,7 +11,8 @@ export const env = createEnv({
 
     // Clerk (doc 03)
     CLERK_SECRET_KEY: z.string().startsWith("sk_"),
-    CLERK_WEBHOOK_SIGNING_SECRET: z.string().startsWith("whsec_"),
+    // Optional: only needed once you wire the Clerk webhook endpoint.
+    CLERK_WEBHOOK_SIGNING_SECRET: z.string().startsWith("whsec_").optional(),
 
     // AI (doc 05)
     ANTHROPIC_API_KEY: z.string().startsWith("sk-ant-"),

@@ -8,15 +8,15 @@ const config = {
   stripe: {
     plans: [
       {
-        tier: "starter",
+        tier: "hobby",
         priceId: {
-          dev: "price_dev_starter_REPLACE_ME",
-          prod: "price_prod_starter_REPLACE_ME",
+          dev: "price_1SLMZRRrDsnlCBCJXitSQ5mp",
+          prod: "price_1SLMZRRrDsnlCBCJXitSQ5mp",
         },
-        name: "Starter",
+        name: "Hobby",
         description: "Perfect to try things out",
-        price: 29,
-        priceAnchor: 49,
+        price: 19,
+        priceAnchor: 29,
         features: [
           { name: "5 projects" },
           { name: "AI chat" },
@@ -24,16 +24,16 @@ const config = {
         ],
       },
       {
-        tier: "pro",
+        tier: "standard",
         priceId: {
-          dev: "price_dev_pro_REPLACE_ME",
-          prod: "price_prod_pro_REPLACE_ME",
+          dev: "price_1SLMZ8RrDsnlCBCJWxgaTkxk",
+          prod: "price_1SLMZ8RrDsnlCBCJWxgaTkxk",
         },
         isFeatured: true,
-        name: "Pro",
-        description: "For power users",
-        price: 99,
-        priceAnchor: 149,
+        name: "Standard",
+        description: "For growing teams",
+        price: 49,
+        priceAnchor: 79,
         features: [
           { name: "Unlimited projects" },
           { name: "AI chat with tool use" },
@@ -41,11 +41,28 @@ const config = {
           { name: "RAG over your documents" },
         ],
       },
+      {
+        tier: "unlimited",
+        priceId: {
+          dev: "price_1SLMYURrDsnlCBCJ90WgXWwG",
+          prod: "price_1SLMYURrDsnlCBCJ90WgXWwG",
+        },
+        name: "Unlimited",
+        description: "For scaling businesses",
+        price: 199,
+        priceAnchor: 299,
+        features: [
+          { name: "Everything in Standard" },
+          { name: "Dedicated support" },
+          { name: "Custom integrations" },
+          { name: "Usage-based limits removed" },
+        ],
+      },
     ],
   },
   email: {
-    from: "Magic Create <hello@magic-create.com>",
-    supportEmail: "support@magic-create.com",
+    from: "Magic Create <onboarding@resend.dev>",
+    supportEmail: "mohsinb.alshammari@gmail.com",
   },
   auth: {
     signInUrl: "/sign-in",

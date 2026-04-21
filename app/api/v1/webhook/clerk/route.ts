@@ -13,6 +13,10 @@ import { capture, EVENTS } from "@/lib/analytics/posthog";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
+  if (!env.CLERK_WEBHOOK_SIGNING_SECRET) {
+    return new Response("Clerk webhook not configured", { status: 503 });
+  }
+
   const h = await headers();
   const svixId = h.get("svix-id");
   const svixTs = h.get("svix-timestamp");

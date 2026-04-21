@@ -17,7 +17,7 @@ export default function PricingPage() {
         <p className="mt-3 text-muted-foreground">Simple plans. Cancel anytime.</p>
       </div>
 
-      <div className="mx-auto mt-12 grid max-w-4xl gap-6 md:grid-cols-2">
+      <div className="mx-auto mt-12 grid max-w-5xl gap-6 md:grid-cols-3">
         {config.stripe.plans.map((plan) => (
           <Card key={plan.tier} className={cn(plan.isFeatured && "border-primary shadow-lg")}>
             <CardHeader>

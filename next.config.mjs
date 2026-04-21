@@ -1,7 +1,9 @@
 import { withSentryConfig } from "@sentry/nextjs";
 
-// Validate env at build time (import happens at module load so missing vars fail the build)
-import "./lib/env.js";
+// Note: env validation runs at build time via `@/lib/env` imports in app code.
+// If you want explicit config-time validation, install `jiti` and uncomment:
+//   import { createJiti } from "jiti";
+//   await createJiti(import.meta.url).import("./lib/env");
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

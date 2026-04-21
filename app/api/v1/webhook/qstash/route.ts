@@ -1,4 +1,3 @@
-import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 import { captureError } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -24,4 +23,12 @@ async function handler(req: Request) {
   }
 }
 
-export const POST = verifySignatureAppRouter(handler);
+// Lazy-import so the signature verifier doesn't read env at module-load time
+// (important for `next build` when QSTASH keys may be absent).
+export async function POST(req: Request) {
+  if (!process.env.QSTASH_CURRENT_SIGNING_KEY || !process.env.QSTASH_NEXT_SIGNING_KEY) {
+    return new Response("QStash not configured", { status: 503 });
+  }
+  const { verifySignatureAppRouter } = await import("@upstash/qstash/nextjs");
+  return verifySignatureAppRouter(handler)(req);
+}
