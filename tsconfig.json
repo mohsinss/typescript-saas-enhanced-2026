@@ -13,24 +13,17 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
-    "paths": {
-      "@/*": ["./*"]
-    },
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
-    "types": ["node", "jest"],
-    "typeRoots": ["./node_modules/@types", "./lib/types"],
-    "target": "ES2017",
+    "paths": { "@/*": ["./*"] },
+    "plugins": [{ "name": "next" }],
+    "target": "ES2022",
     "noImplicitAny": true,
     "strictNullChecks": true,
     "strictFunctionTypes": true,
     "strictBindCallApply": true,
     "strictPropertyInitialization": true,
     "noImplicitThis": true,
-    "alwaysStrict": true
+    "alwaysStrict": true,
+    "noUncheckedIndexedAccess": false
   },
   "include": [
     "next-env.d.ts",
@@ -38,7 +31,5 @@
     "**/*.tsx",
     ".next/types/**/*.ts"
   ],
-  "exclude": [
-    "node_modules"
-  ]
+  "exclude": ["node_modules", ".next", "dist", "coverage", "playwright-report"]
 }

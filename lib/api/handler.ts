@@ -1,210 +1,101 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { z } from "zod";
-import { authOptions } from "@/lib/auth/next-auth";
-import { ApiResponse, ApiError, ErrorCode } from "@/lib/types/api";
-import { BaseError, ValidationError, AuthenticationError, normalizeError } from "@/lib/errors";
-import { logger } from "@/lib/infrastructure/logger";
-import { checkRateLimit, RateLimitConfig } from "@/lib/middleware/rateLimit";
+import { NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
+import { headers } from "next/headers";
+import { z, type ZodTypeAny } from "zod";
+import { captureError } from "@/lib/logger";
+import { ratelimit } from "@/lib/ratelimit";
+import { normalizeError, UnauthorizedError, RateLimitError } from "./errors";
 
-interface HandlerContext {
-  requestId: string;
-  session?: any;
-  params: Record<string, string>;
-}
+type RateLimitBucket = keyof typeof ratelimit;
 
-interface HandlerOptions<T = any> {
-  schema?: z.ZodSchema<T>;
-  requireAuth?: boolean;
-  requireSubscription?: boolean;
-  rateLimit?: RateLimitConfig;
-}
+type Ctx<TIn, TParams> = {
+  req: Request;
+  input: TIn;
+  params: TParams;
+  userId: string | null;
+};
 
-type HandlerFunction<T = any, R = any> = (
-  req: NextRequest,
-  context: HandlerContext,
-  data?: T
-) => Promise<ApiResponse<R>>;
+type HandlerOptions<TIn, TOut, TParams> = {
+  schema?: ZodTypeAny;
+  auth?: "required" | "optional" | "none";
+  rateLimit?: RateLimitBucket;
+  handler: (ctx: Ctx<TIn, TParams>) => Promise<TOut> | TOut;
+};
 
-/** Next.js 15+ route context with async params */
-interface RouteContext {
-  params: Promise<Record<string, string>>;
-}
-
-/**
- * Creates a standardized API handler with built-in features:
- * - Request validation
- * - Authentication checks
- * - Rate limiting
- * - Error handling
- * - Logging
- */
-export function createHandler<T = any, R = any>(
-  handler: HandlerFunction<T, R>,
-  options: HandlerOptions<T> = {}
+export function createHandler<TIn = unknown, TOut = unknown, TParams = Record<string, string>>(
+  opts: HandlerOptions<TIn, TOut, TParams>,
 ) {
   return async (
-    req: NextRequest,
-    context: RouteContext
-  ): Promise<NextResponse> => {
-    const requestId = crypto.randomUUID();
-    const startTime = Date.now();
-    
-    // Log incoming request
-    logger.apiRequest(req.method, req.url, { requestId });
-    
+    req: Request,
+    routeCtx: { params: Promise<TParams> } | { params: TParams } | undefined,
+  ) => {
     try {
-      // Rate limiting
-      if (options.rateLimit) {
-        await checkRateLimit(req, options.rateLimit);
+      const { userId } = await auth();
+
+      if (opts.auth === "required" && !userId) {
+        throw new UnauthorizedError();
       }
-      
-      // Authentication check
-      let session = null;
-      if (options.requireAuth) {
-        session = await getServerSession(authOptions);
-        
-        if (!session?.user) {
-          throw new AuthenticationError();
-        }
-        
-        // Subscription check
-        if (options.requireSubscription) {
-          // TODO: Check if user has active subscription
-          // const user = await getUserById(session.user.id);
-          // if (!user.hasAccess) {
-          //   throw new PaymentRequiredError();
-          // }
-        }
+
+      if (opts.rateLimit) {
+        const id = userId ?? (await headers()).get("x-forwarded-for") ?? "anon";
+        const { success } = await ratelimit[opts.rateLimit].limit(id);
+        if (!success) throw new RateLimitError();
       }
-      
-      // Parse and validate request body
-      let validatedData: T | undefined;
-      if (options.schema && ["POST", "PUT", "PATCH"].includes(req.method)) {
-        const body = await req.json();
-        const result = options.schema.safeParse(body);
-        
-        if (!result.success) {
-          throw new ValidationError(
-            "Invalid request data",
-            result.error.flatten()
-          );
+
+      let input: unknown = undefined;
+      if (opts.schema) {
+        const method = req.method.toUpperCase();
+        if (method === "GET" || method === "DELETE") {
+          const url = new URL(req.url);
+          input = Object.fromEntries(url.searchParams.entries());
+        } else {
+          input = await req.json().catch(() => ({}));
         }
-        
-        validatedData = result.data;
+        input = opts.schema.parse(input);
       }
-      
-      // Execute handler
-      const params = context?.params ? await context.params : {};
-      const handlerContext: HandlerContext = {
-        requestId,
-        session,
+
+      const params = routeCtx
+        ? await Promise.resolve((routeCtx as { params: Promise<TParams> | TParams }).params)
+        : ({} as TParams);
+
+      const data = await opts.handler({
+        req,
+        input: input as TIn,
         params,
-      };
-      
-      const response = await handler(req, handlerContext, validatedData);
-      
-      // Log successful response
-      const duration = Date.now() - startTime;
-      logger.info("API request completed", {
-        requestId,
-        duration,
-        method: req.method,
-        path: req.url,
-        status: 200,
+        userId: userId ?? null,
       });
-      
-      // Return success response
-      return NextResponse.json(response, {
-        status: 200,
-        headers: {
-          "X-Request-Id": requestId,
-          "X-Response-Time": `${duration}ms`,
-          "X-API-Version": "v1",
-        },
-      });
-      
-    } catch (error) {
-      // Handle errors
-      const duration = Date.now() - startTime;
-      const normalizedError = normalizeError(error);
-      
-      // Log based on error type - operational errors (4xx) are warnings, not errors
-      const logContext = {
-        requestId,
-        duration,
-        method: req.method,
-        path: req.url,
-        statusCode: normalizedError.statusCode,
-      };
-      
-      if (normalizedError.isOperational && normalizedError.statusCode < 500) {
-        // Expected client errors (404, 400, 401, etc.) - log as debug/info
-        logger.debug(`Client error: ${normalizedError.message}`, logContext);
-      } else {
-        // Unexpected server errors (5xx) - log as error
-        logger.error("API request failed", normalizedError, logContext);
+
+      return NextResponse.json({ data });
+    } catch (err) {
+      const normalized = normalizeError(err);
+      if (normalized.status >= 500) {
+        captureError(err, { url: req.url });
       }
-      
-      // Create error response
-      const errorResponse: ApiError = {
-        code: normalizedError.code,
-        message: normalizedError.message,
-        details: normalizedError.details,
-        timestamp: new Date().toISOString(),
-        requestId,
-        path: req.url,
-      };
-      
-      // Return error response
       return NextResponse.json(
         {
-          success: false,
-          error: errorResponse,
-        } as ApiResponse,
-        {
-          status: normalizedError.statusCode,
-          headers: {
-            "X-Request-Id": requestId,
-            "X-Response-Time": `${duration}ms`,
-            "X-API-Version": "v1",
+          error: {
+            code: normalized.code,
+            message: normalized.message,
+            details: normalized.details,
           },
-        }
+        },
+        { status: normalized.status },
       );
     }
   };
 }
 
-/**
- * Creates a public API handler (no auth required)
- */
-export function createPublicHandler<T = any, R = any>(
-  handler: HandlerFunction<T, R>,
-  options: Omit<HandlerOptions<T>, "requireAuth" | "requireSubscription"> = {}
-) {
-  return createHandler(handler, { ...options, requireAuth: false });
-}
+// Convenience helpers that pre-set auth mode
+export const createProtectedHandler = <TIn = unknown, TOut = unknown, TParams = Record<string, string>>(
+  opts: Omit<HandlerOptions<TIn, TOut, TParams>, "auth">,
+) => createHandler({ ...opts, auth: "required" });
 
-/**
- * Creates a protected API handler (auth required)
- */
-export function createProtectedHandler<T = any, R = any>(
-  handler: HandlerFunction<T, R>,
-  options: Omit<HandlerOptions<T>, "requireAuth"> = {}
-) {
-  return createHandler(handler, { ...options, requireAuth: true });
-}
+export const createPublicHandler = <TIn = unknown, TOut = unknown, TParams = Record<string, string>>(
+  opts: Omit<HandlerOptions<TIn, TOut, TParams>, "auth">,
+) => createHandler({ ...opts, auth: "none" });
 
-/**
- * Creates a subscription-required API handler
- */
-export function createSubscriptionHandler<T = any, R = any>(
-  handler: HandlerFunction<T, R>,
-  options: Omit<HandlerOptions<T>, "requireAuth" | "requireSubscription"> = {}
-) {
-  return createHandler(handler, { 
-    ...options, 
-    requireAuth: true,
-    requireSubscription: true 
-  });
-}
+export type ApiResponse<T> =
+  | { data: T; error?: never }
+  | { data?: never; error: { code: string; message: string; details?: unknown } };
+
+export { z };

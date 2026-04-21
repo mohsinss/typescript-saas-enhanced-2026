@@ -1,36 +1,22 @@
-import { ReactNode } from "react";
-import { Inter } from "next/font/google";
-import { Viewport } from "next";
-import PlausibleProvider from "next-plausible";
-import { getSEOTags } from "@/lib/seo";
-import ClientLayout from "@/components/LayoutClient";
+import type { Metadata } from "next";
+import { ClerkProvider } from "@clerk/nextjs";
+import { Providers } from "@/components/providers";
 import config from "@/config";
 import "./globals.css";
 
-const font = Inter({ subsets: ["latin"] });
-
-export const viewport: Viewport = {
-  // Will use the primary color of your theme to show a nice theme color in the URL bar of supported browsers
-  themeColor: config.colors.main,
-  width: "device-width",
-  initialScale: 1,
+export const metadata: Metadata = {
+  title: { default: config.appName, template: `%s · ${config.appName}` },
+  description: config.appDescription,
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? `https://${config.domainName}`),
 };
 
-// This adds default SEO tags to all pages in our app.
-// You can override them in each page passing params to getSOTags() function.
-export const metadata = getSEOTags();
-
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" data-theme={config.colors.theme} className={font.className}>
-      {config.domainName && (
-        <head>
-          <PlausibleProvider domain={config.domainName} />
-        </head>
-      )}
-      <body>
-        {/* ClientLayout contains all the client wrappers (Crisp chat support, toast messages, tooltips, etc.) */}
-        <ClientLayout>{children}</ClientLayout>
+    <html lang="en" suppressHydrationWarning>
+      <body className="min-h-dvh bg-background font-sans antialiased">
+        <ClerkProvider>
+          <Providers>{children}</Providers>
+        </ClerkProvider>
       </body>
     </html>
   );

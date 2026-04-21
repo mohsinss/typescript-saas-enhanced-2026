@@ -1,208 +1,130 @@
-import { NextRequest, NextResponse } from "next/server";
 import { headers } from "next/headers";
-// @ts-ignore - Stripe types
-import Stripe from "stripe";
-import connectMongo from "@/lib/db/mongoose";
-import config from "@/config";
-import User from "@/models/User";
-import { findCheckoutSession, stripe } from "@/lib/payments/stripe";
-import { logger } from "@/lib/infrastructure/logger";
-import { sendReceiptEmail, sendCancellationEmail } from "@/lib/email/mailgun";
-import { env } from "@/lib/config/env";
+import type Stripe from "stripe";
+import { eq } from "drizzle-orm";
+import { clerkClient } from "@clerk/nextjs/server";
+import { requireStripe } from "@/lib/payments/stripe";
+import { env } from "@/lib/env";
+import { db, users } from "@/db";
+import { upsertSubscription } from "@/lib/db/queries/subscriptions";
+import { captureError, logger } from "@/lib/logger";
+import { sendReceiptEmail, sendSubscriptionCancelledEmail } from "@/lib/email/resend";
+import { capture, EVENTS } from "@/lib/analytics/posthog";
 
-const webhookSecret = env.STRIPE_WEBHOOK_SECRET!;
+export const runtime = "nodejs";
 
-/**
- * Stripe webhook handler
- * POST /api/v1/webhook/stripe
- */
-export async function POST(req: NextRequest) {
-  await connectMongo();
+export async function POST(req: Request) {
+  if (!env.STRIPE_WEBHOOK_SECRET) return new Response("Stripe not configured", { status: 500 });
 
-  const body = await req.text();
-  const headersList = await headers();
-  const signature = headersList.get("stripe-signature");
+  const sig = (await headers()).get("stripe-signature");
+  if (!sig) return new Response("Missing signature", { status: 400 });
 
-  if (!signature) {
-    logger.warn("Stripe webhook missing signature");
-    return NextResponse.json({ error: "Missing signature" }, { status: 400 });
-  }
+  const raw = await req.text();
+  const stripe = requireStripe();
 
   let event: Stripe.Event;
-
   try {
-    event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
+    event = stripe.webhooks.constructEvent(raw, sig, env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    const error = err as Error;
-    logger.error("Webhook signature verification failed", error);
-    return NextResponse.json({ error: error.message }, { status: 400 });
+    logger.error({ err }, "Stripe signature verification failed");
+    return new Response("Invalid signature", { status: 400 });
   }
 
-  const eventType = event.type;
-  logger.info("Stripe webhook received", { 
-    eventType, 
-    eventId: event.id 
-  });
-
   try {
-    switch (eventType) {
+    switch (event.type) {
       case "checkout.session.completed": {
-        const stripeObject = event.data.object as Stripe.Checkout.Session;
-        const session = await findCheckoutSession(stripeObject.id);
-        
-        if (!session) {
-          logger.error("Checkout session not found", undefined, { 
-            sessionId: stripeObject.id 
-          });
-          break;
+        const session = event.data.object as Stripe.Checkout.Session;
+        const clerkUserId =
+          session.metadata?.clerkUserId ?? (session.client_reference_id ?? null);
+        if (!clerkUserId) break;
+        const subId =
+          typeof session.subscription === "string"
+            ? session.subscription
+            : session.subscription?.id;
+        if (!subId) break;
+
+        const sub = await stripe.subscriptions.retrieve(subId, { expand: ["items.data.price"] });
+        await syncSubscription(clerkUserId, sub);
+
+        if (session.customer_email && env.RESEND_API_KEY) {
+          await sendReceiptEmail({
+            to: session.customer_email,
+            amount: (session.amount_total ?? 0) / 100,
+            currency: session.currency ?? "usd",
+          }).catch((err) => captureError(err, { flow: "receipt-email" }));
         }
 
-        const customerId = session.customer as string;
-        const priceId = session.line_items?.data[0]?.price?.id;
-        const userId = stripeObject.client_reference_id;
-        const plan = config.stripe.plans.find((p) => p.priceId === priceId);
+        await capture({
+          distinctId: clerkUserId,
+          event: EVENTS.checkout_succeeded,
+          properties: {
+            amount: (session.amount_total ?? 0) / 100,
+            currency: session.currency,
+          },
+        }).catch(() => {});
+        break;
+      }
+      case "customer.subscription.updated": {
+        const sub = event.data.object as Stripe.Subscription;
+        const clerkUserId = sub.metadata?.clerkUserId;
+        if (!clerkUserId) break;
+        await syncSubscription(clerkUserId, sub);
+        break;
+      }
+      case "customer.subscription.deleted": {
+        const sub = event.data.object as Stripe.Subscription;
+        const clerkUserId = sub.metadata?.clerkUserId;
+        if (!clerkUserId) break;
+        await syncSubscription(clerkUserId, sub);
 
-        if (!plan) {
-          logger.error("Plan not found for price", undefined, { priceId });
-          break;
-        }
-
-        const customer = await stripe.customers.retrieve(customerId) as Stripe.Customer;
-        let user;
-
-        if (userId) {
-          user = await User.findById(userId);
-        } else if (customer.email) {
-          user = await User.findOne({ email: customer.email });
-
-          if (!user) {
-            user = await User.create({
-              email: customer.email,
-              name: customer.name,
-            });
-            await user.save();
-          }
-        }
-
-        if (!user) {
-          logger.error("No user found for checkout session", undefined, {
-            userId,
-            customerEmail: customer.email,
-          });
-          throw new Error("No user found");
-        }
-
-        // Update user with subscription data
-        user.priceId = priceId;
-        user.customerId = customerId;
-        user.hasAccess = true;
-        await user.save();
-
-        logger.info("User subscription activated", {
-          userId: user._id,
-          priceId,
-          customerId,
-        });
-
-        // Send receipt email
-        if (customer.email) {
-          await sendReceiptEmail(
-            customer.email,
-            session.amount_total || plan.price * 100,
-            plan.name
+        const client = await clerkClient();
+        const clerkUser = await client.users.getUser(clerkUserId);
+        const email = clerkUser.emailAddresses[0]?.emailAddress;
+        if (email && env.RESEND_API_KEY) {
+          await sendSubscriptionCancelledEmail({ to: email }).catch((err) =>
+            captureError(err, { flow: "cancel-email" }),
           );
         }
-
+        await capture({
+          distinctId: clerkUserId,
+          event: EVENTS.subscription_cancelled,
+        }).catch(() => {});
         break;
       }
-
-      case "checkout.session.expired": {
-        const stripeObject = event.data.object as Stripe.Checkout.Session;
-        logger.info("Checkout session expired", { 
-          sessionId: stripeObject.id,
-          customerEmail: stripeObject.customer_email,
-        });
-        break;
-      }
-
-      case "customer.subscription.updated": {
-        const subscription = event.data.object as Stripe.Subscription;
-        logger.info("Subscription updated", {
-          subscriptionId: subscription.id,
-          status: subscription.status,
-          cancelAtPeriodEnd: subscription.cancel_at_period_end,
-        });
-        
-        // Handle subscription changes if needed
-        break;
-      }
-
-      case "customer.subscription.deleted": {
-        const subscription = event.data.object as Stripe.Subscription;
-        const user = await User.findOne({ customerId: subscription.customer });
-
-        if (user) {
-          user.hasAccess = false;
-          await user.save();
-
-          logger.info("User subscription cancelled", {
-            userId: user._id,
-            customerId: subscription.customer,
-          });
-
-          // Send cancellation email
-          if (user.email && subscription.canceled_at) {
-            const endDate = new Date(subscription.canceled_at * 1000);
-            await sendCancellationEmail(user.email, endDate);
-          }
-        }
-
-        break;
-      }
-
-      case "invoice.paid": {
-        const invoice = event.data.object as Stripe.Invoice;
-        const priceId = invoice.lines.data[0]?.price?.id;
-        const customerId = invoice.customer as string;
-
-        const user = await User.findOne({ customerId });
-
-        if (user && user.priceId === priceId) {
-          user.hasAccess = true;
-          await user.save();
-
-          logger.info("Invoice paid - access granted", {
-            userId: user._id,
-            invoiceId: invoice.id,
-          });
-        }
-
-        break;
-      }
-
       case "invoice.payment_failed": {
-        const invoice = event.data.object as Stripe.Invoice;
-        logger.warn("Invoice payment failed", {
-          invoiceId: invoice.id,
-          customerId: invoice.customer,
-          attemptCount: invoice.attempt_count,
-        });
-        
-        // We don't immediately revoke access - Stripe will retry
-        // Access will be revoked when subscription is deleted
+        const inv = event.data.object as Stripe.Invoice;
+        logger.warn({ customer: inv.customer, attempt: inv.attempt_count }, "Payment failed");
         break;
       }
-
-      default:
-        logger.debug("Unhandled webhook event type", { eventType });
     }
-  } catch (error) {
-    logger.error("Stripe webhook processing error", error, { 
-      eventType,
-      eventId: event.id 
-    });
-    // Return 200 to prevent Stripe from retrying
+  } catch (err) {
+    captureError(err, { type: event.type, flow: "stripe-webhook" });
+    return new Response("Handler error", { status: 500 });
   }
 
-  return NextResponse.json({ received: true });
+  return new Response(null, { status: 200 });
+}
+
+async function syncSubscription(clerkUserId: string, sub: Stripe.Subscription) {
+  const userRow = (
+    await db.select({ id: users.id }).from(users).where(eq(users.clerkId, clerkUserId)).limit(1)
+  )[0];
+  if (!userRow) return;
+
+  const priceId = sub.items.data[0]?.price.id ?? null;
+  const isActive = sub.status === "active" || sub.status === "trialing";
+
+  await upsertSubscription({
+    userId: userRow.id,
+    stripeCustomerId: typeof sub.customer === "string" ? sub.customer : sub.customer.id,
+    stripeSubscriptionId: sub.id,
+    stripePriceId: priceId,
+    status: sub.status,
+    hasAccess: isActive,
+    currentPeriodEnd: sub.current_period_end ? new Date(sub.current_period_end * 1000) : null,
+  });
+
+  const client = await clerkClient();
+  await client.users.updateUser(clerkUserId, {
+    publicMetadata: { hasAccess: isActive, priceId, status: sub.status },
+  });
 }

@@ -1,35 +1,81 @@
-# ShipFast — Typescript
+# magic-create
 
-Hey maker 👋 it's Marc from [ShipFast](https://shipfa.st/docs). Let's get your startup off the ground, FAST ⚡️
+A 2026 state-of-the-art AI-SaaS boilerplate built to spin up new web apps in minutes.
 
-<sub>**Watch/Star the repo to be notified when updates are pushed**</sub>
+## Stack
 
-## Get Started
+- **Next.js 15** (App Router) · **React 19** · **TypeScript 5.7**
+- **Clerk** — auth, orgs, RBAC, MFA, social logins
+- **Postgres (Neon) + Drizzle + pgvector** — typed SQL, RAG-ready
+- **Vercel AI SDK + Anthropic Claude** — streaming, tool-use, prompt caching
+- **shadcn/ui + Tailwind** — component system you own
+- **Stripe** — subscriptions, billing portal, webhooks
+- **Resend + React Email** — JSX email templates
+- **Upstash Redis + QStash** — rate limiting + background jobs
+- **Sentry + PostHog** — errors, analytics, flags, session replay
+- **Vitest + Playwright + MSW** — unit + E2E tests
+- **GitHub Actions + Docker** — CI + containerization
+- `pnpm new-project` — one-command scaffold for fresh apps
 
-1. Follow the [Get Started Tutorial](https://shipfa.st/docs) to clone the repo and run your local server 💻
+## Quickstart
 
-<sub>**Looking for the /pages router version?** Use this [documentation](https://shipfa.st/docs-old) instead</sub>
+```bash
+pnpm install
+cp .env.example .env.local     # fill in secrets
+pnpm db:generate && pnpm db:migrate
+pnpm dev
+```
 
-2. Follow the [Ship In 5 Minutes Tutorial](https://shipfa.st/docs/tutorials/ship-in-5-minutes) to learn the foundation and ship your app quickly ⚡️
+Open http://localhost:3000.
 
-## Links
+## Provisioning
 
--   [📚 Documentation](https://shipfa.st/docs)
--   [📣 Updates](https://shipfast.beehiiv.com/)
--   [🧑‍💻 Discord](https://shipfa.st/dashboard)
--   [🥇 Leaderboard](https://shipfa.st/leaderboard)
+You'll need accounts at:
 
-## Support
+| Service | Purpose | Required |
+|---------|---------|----------|
+| [Clerk](https://clerk.com) | Auth | Yes |
+| [Neon](https://neon.tech) | Postgres | Yes |
+| [Anthropic](https://console.anthropic.com) | Claude API | Yes |
+| [Stripe](https://dashboard.stripe.com) | Payments | If billing |
+| [Resend](https://resend.com) | Email | If sending email |
+| [Upstash](https://upstash.com) | Redis + QStash | For rate limit / jobs |
+| [Sentry](https://sentry.io) | Errors | Recommended |
+| [PostHog](https://posthog.com) | Analytics + flags | Recommended |
 
-Reach out to me on [Twitter](https://twitter.com/marc_louvion) or marc@shipfa.st
+After creating accounts, paste keys into `.env.local`. See [docs/setup/01-environment.md](docs/setup/01-environment.md) for the full checklist.
 
-\_
+## Spin up a new project
 
-Let's ship it, FAST ⚡️
+```bash
+pnpm new-project
+```
 
-P.S.
+Walks you through name, secrets, optional Stripe/Resend/etc., and produces a fresh repo in a sibling directory.
 
--   Want to showcase your startups? Get your [Indie Page](https://indiepa.ge?ref=shipfast_readme) and share your entrepreneur's journey. Join 3,132 founders ⭐️
--   Don't get banned from Stripe for 1 dispute. Use [ByeDispute](https://byedispute.com/?ref=shipfast_readme) to prevent them from happenening 🛡️
--   Make your launch go viral and get your first customers with [LaunchViral](https://launchvir.al/?ref=shipfast_readme) 🚀
--   Stop paying 0.4% per Stripe invoices [Zenvoice](https://zenvoice.io/?ref=shipfast_readme) 🤕
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md) for the full folder spec and module boundaries. See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for phased setup docs (`docs/setup/*.md`).
+
+## Scripts
+
+```
+pnpm dev              # Next dev server (Turbopack)
+pnpm build            # Production build
+pnpm start            # Run production build
+pnpm type-check       # TypeScript strict check
+pnpm lint             # ESLint
+pnpm test             # Vitest unit tests
+pnpm test:coverage    # with coverage
+pnpm test:e2e         # Playwright E2E
+pnpm db:generate      # Drizzle migration from schema diff
+pnpm db:migrate       # Apply migrations
+pnpm db:studio        # Drizzle Studio (DB explorer)
+pnpm db:seed          # Seed dev data
+pnpm email:dev        # React Email preview server
+pnpm new-project      # Spin up a new project from this boilerplate
+```
+
+## License
+
+MIT
