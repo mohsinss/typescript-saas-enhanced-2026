@@ -27,6 +27,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     sessionsTable,
     verificationTokensTable: verificationTokens,
   }),
+  trustHost: true,
   session: { strategy: "database" },
   providers: [
     Google({
