@@ -2,7 +2,14 @@ import NextAuth, { type DefaultSession } from "next-auth";
 import Google from "next-auth/providers/google";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { eq } from "drizzle-orm";
-import { db, subscriptions } from "@/db";
+import {
+  db,
+  users,
+  accounts,
+  sessions as sessionsTable,
+  verificationTokens,
+  subscriptions,
+} from "@/db";
 
 declare module "next-auth" {
   interface Session {
@@ -14,7 +21,12 @@ declare module "next-auth" {
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: DrizzleAdapter(db),
+  adapter: DrizzleAdapter(db, {
+    usersTable: users,
+    accountsTable: accounts,
+    sessionsTable,
+    verificationTokensTable: verificationTokens,
+  }),
   session: { strategy: "database" },
   providers: [
     Google({
