@@ -1,16 +1,6 @@
 #!/usr/bin/env tsx
 /* eslint-disable no-console */
-import {
-  intro,
-  outro,
-  text,
-  confirm,
-  password,
-  note,
-  isCancel,
-  cancel,
-  spinner,
-} from "@clack/prompts";
+import { intro, outro, text, isCancel, cancel, spinner } from "@clack/prompts";
 import { execa } from "execa";
 import chalk from "chalk";
 import { promises as fs } from "node:fs";
@@ -20,236 +10,141 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
-type Answers = {
-  projectName: string;
-  projectSlug: string;
-  destination: string;
-  appUrl: string;
-  clerkPk: string;
-  clerkSk: string;
-  clerkWhSec: string;
-  databaseUrl: string;
-  databaseUrlUnpooled: string;
-  anthropicKey: string;
-  stripe?: { sk: string; whsec: string };
-  resend?: { key: string; from: string };
-  upstash?: { url: string; token: string; qstash: string };
-  sentryDsn?: string;
-  posthogKey?: string;
-  createGithub: boolean;
-  installNow: boolean;
-};
+const RSYNC_EXCLUDES = [
+  "--exclude=.git",
+  "--exclude=node_modules",
+  "--exclude=.next",
+  // Never carry secrets between projects. .env.example is preserved.
+  "--exclude=.env",
+  "--exclude=.env.local",
+  "--exclude=.env.development",
+  "--exclude=.env.development.local",
+  "--exclude=.env.production",
+  "--exclude=.env.production.local",
+  "--exclude=.env.test",
+  "--exclude=.env.vercel",
+  "--exclude=.vercel",
+  "--exclude=.turbo",
+  "--exclude=coverage",
+  "--exclude=playwright-report",
+  "--exclude=test-results",
+  "--exclude=.email-export",
+  "--exclude=.claude",
+  "--exclude=.DS_Store",
+];
 
-async function ask(): Promise<Answers> {
+async function main() {
   intro(chalk.bold("magic-create — new project"));
 
-  const projectName = await textReq("Project name (display)", "Acme");
-  const projectSlug = await textReq("Project slug (kebab-case)", toSlug(projectName));
-  const destination = await textReq(
-    "Destination directory",
-    path.join(path.dirname(ROOT), projectSlug),
-  );
-  const appUrl = await textReq("App URL for dev", "http://localhost:3000");
+  // Positional args: pnpm new-project <slug> [git-url]
+  const [argSlug, argGitUrl] = process.argv.slice(2);
 
-  note("Clerk — https://dashboard.clerk.com");
-  const clerkPk = await textReq("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY (pk_...)", "");
-  const clerkSk = await secretReq("CLERK_SECRET_KEY (sk_...)");
-  const clerkWhSec = await secretReq("CLERK_WEBHOOK_SIGNING_SECRET (whsec_...)");
+  const slug = argSlug ?? (await askSlug());
+  if (!/^[a-z][a-z0-9-]*$/.test(slug)) {
+    cancel(`Invalid slug "${slug}" — must be kebab-case, lowercase, starts with a letter.`);
+    process.exit(1);
+  }
 
-  note("Neon — https://neon.tech");
-  const databaseUrl = await secretReq("DATABASE_URL (pooled)");
-  const databaseUrlUnpooled = await secretReq("DATABASE_URL_UNPOOLED (direct)");
+  const displayName = slug
+    .split(/-|_/)
+    .map((w) => (w[0] ?? "").toUpperCase() + w.slice(1))
+    .join(" ");
 
-  note("Anthropic — https://console.anthropic.com");
-  const anthropicKey = await secretReq("ANTHROPIC_API_KEY (sk-ant-...)");
+  const destination = path.join(path.dirname(ROOT), slug);
 
-  const withStripe = await boolAsk("Wire Stripe?", false);
-  const stripe = withStripe
-    ? {
-        sk: await secretReq("STRIPE_SECRET_KEY"),
-        whsec: await secretReq("STRIPE_WEBHOOK_SECRET"),
-      }
-    : undefined;
+  const gitUrl = argGitUrl ?? (await askGitUrl());
 
-  const withResend = await boolAsk("Wire Resend?", false);
-  const resend = withResend
-    ? {
-        key: await secretReq("RESEND_API_KEY"),
-        from: await textReq("EMAIL_FROM", `${projectName} <hello@${projectSlug}.com>`),
-      }
-    : undefined;
-
-  const withUpstash = await boolAsk("Wire Upstash?", false);
-  const upstash = withUpstash
-    ? {
-        url: await secretReq("UPSTASH_REDIS_REST_URL"),
-        token: await secretReq("UPSTASH_REDIS_REST_TOKEN"),
-        qstash: await secretReq("QSTASH_TOKEN"),
-      }
-    : undefined;
-
-  const withSentry = await boolAsk("Wire Sentry?", false);
-  const sentryDsn = withSentry ? await textReq("NEXT_PUBLIC_SENTRY_DSN", "") : undefined;
-
-  const withPostHog = await boolAsk("Wire PostHog?", false);
-  const posthogKey = withPostHog ? await textReq("NEXT_PUBLIC_POSTHOG_KEY (phc_...)", "") : undefined;
-
-  const createGithub = await boolAsk("Create GitHub repo (via gh CLI)?", false);
-  const installNow = await boolAsk("Run pnpm install now?", true);
-
-  return {
-    projectName,
-    projectSlug,
-    destination,
-    appUrl,
-    clerkPk,
-    clerkSk,
-    clerkWhSec,
-    databaseUrl,
-    databaseUrlUnpooled,
-    anthropicKey,
-    stripe,
-    resend,
-    upstash,
-    sentryDsn,
-    posthogKey,
-    createGithub,
-    installNow,
-  };
-}
-
-async function run() {
-  const a = await ask();
-  const s = spinner();
+  if (destination === ROOT) {
+    cancel("Refusing to scaffold into the boilerplate itself.");
+    process.exit(1);
+  }
 
   try {
-    await fs.access(a.destination);
-    const existing = await fs.readdir(a.destination);
+    const existing = await fs.readdir(destination);
     if (existing.length > 0) {
-      cancel(`Destination ${a.destination} exists and is not empty`);
+      cancel(`Destination ${destination} exists and is not empty.`);
       process.exit(1);
     }
   } catch {
     // directory does not exist — good
   }
 
-  s.start("Copying boilerplate…");
-  await execa("rsync", [
-    "-a",
-    "--exclude=.git",
-    "--exclude=node_modules",
-    "--exclude=.next",
-    // Never carry secrets across projects. .env.example is preserved.
-    "--exclude=.env",
-    "--exclude=.env.local",
-    "--exclude=.env.development",
-    "--exclude=.env.development.local",
-    "--exclude=.env.production",
-    "--exclude=.env.production.local",
-    "--exclude=.env.test",
-    "--exclude=.env.vercel",
-    // Transient / per-project state
-    "--exclude=.vercel",
-    "--exclude=.turbo",
-    "--exclude=coverage",
-    "--exclude=playwright-report",
-    "--exclude=test-results",
-    "--exclude=.email-export",
-    "--exclude=.claude",
-    "--exclude=.DS_Store",
-    `${ROOT}/`,
-    a.destination,
-  ]);
+  const s = spinner();
+
+  s.start(`Copying boilerplate -> ${destination}`);
+  await execa("rsync", ["-a", ...RSYNC_EXCLUDES, `${ROOT}/`, destination]);
   s.stop("Copied.");
 
-  s.start("Renaming references…");
+  s.start("Renaming references");
   await replaceInFile(
-    path.join(a.destination, "package.json"),
+    path.join(destination, "package.json"),
     /"name": "[^"]+"/,
-    `"name": "${a.projectSlug}"`,
+    `"name": "${slug}"`,
   );
   await replaceInFile(
-    path.join(a.destination, "config.ts"),
+    path.join(destination, "config.ts"),
     /appName: "[^"]+"/,
-    `appName: "${a.projectName}"`,
+    `appName: "${displayName}"`,
   );
   await replaceInFile(
-    path.join(a.destination, "config.ts"),
+    path.join(destination, "config.ts"),
     /domainName: "[^"]+"/,
-    `domainName: "${a.projectSlug}.com"`,
+    `domainName: "${slug}.com"`,
   );
   s.stop("Renamed.");
 
-  s.start("Writing .env.local…");
-  const lines = [
-    `NODE_ENV=development`,
-    `NEXT_PUBLIC_APP_URL=${a.appUrl}`,
-    `DATABASE_URL=${a.databaseUrl}`,
-    `DATABASE_URL_UNPOOLED=${a.databaseUrlUnpooled}`,
-    `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${a.clerkPk}`,
-    `CLERK_SECRET_KEY=${a.clerkSk}`,
-    `CLERK_WEBHOOK_SIGNING_SECRET=${a.clerkWhSec}`,
-    `NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in`,
-    `NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up`,
-    `ANTHROPIC_API_KEY=${a.anthropicKey}`,
-  ];
-  if (a.stripe) lines.push(`STRIPE_SECRET_KEY=${a.stripe.sk}`, `STRIPE_WEBHOOK_SECRET=${a.stripe.whsec}`);
-  if (a.resend) lines.push(`RESEND_API_KEY=${a.resend.key}`, `EMAIL_FROM=${a.resend.from}`);
-  if (a.upstash) {
-    lines.push(
-      `UPSTASH_REDIS_REST_URL=${a.upstash.url}`,
-      `UPSTASH_REDIS_REST_TOKEN=${a.upstash.token}`,
-      `QSTASH_TOKEN=${a.upstash.qstash}`,
-    );
-  }
-  if (a.sentryDsn) lines.push(`NEXT_PUBLIC_SENTRY_DSN=${a.sentryDsn}`);
-  if (a.posthogKey)
-    lines.push(`NEXT_PUBLIC_POSTHOG_KEY=${a.posthogKey}`, `NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com`);
-  await fs.writeFile(path.join(a.destination, ".env.local"), lines.join("\n") + "\n", "utf8");
-  s.stop(".env.local written.");
+  s.start("Creating .env.local from .env.example");
+  await fs.copyFile(
+    path.join(destination, ".env.example"),
+    path.join(destination, ".env.local"),
+  );
+  s.stop(".env.local created (fill in secrets later).");
 
-  s.start("Initializing git…");
-  await execa("git", ["init", "-b", "main"], { cwd: a.destination });
-  await execa("git", ["add", "."], { cwd: a.destination });
+  s.start("Initializing git");
+  await execa("git", ["init", "-b", "main"], { cwd: destination });
+  await execa("git", ["add", "."], { cwd: destination });
   await execa(
     "git",
-    ["commit", "-m", "chore: initial scaffold from magic-create boilerplate"],
-    { cwd: a.destination },
+    ["commit", "-m", "chore: initial commit from magic-create boilerplate"],
+    { cwd: destination },
   );
   s.stop("git initialized.");
 
-  if (a.installNow) {
-    s.start("pnpm install…");
-    await execa("pnpm", ["install"], { cwd: a.destination, stdio: "inherit" });
-    s.stop("Installed.");
-  }
-
-  if (a.createGithub) {
-    s.start("Creating GitHub repo via gh…");
+  if (gitUrl) {
+    s.start(`Pushing to ${gitUrl}`);
     try {
-      await execa("gh", ["repo", "create", a.projectSlug, "--private", "--source", ".", "--push"], {
-        cwd: a.destination,
+      await execa("git", ["remote", "add", "origin", gitUrl], { cwd: destination });
+      await execa("git", ["push", "-u", "origin", "main"], {
+        cwd: destination,
         stdio: "inherit",
       });
-      s.stop("GitHub repo created + pushed.");
-    } catch {
-      s.stop("gh failed — run `gh repo create` manually.");
+      s.stop("Pushed.");
+    } catch (err) {
+      s.stop(
+        `Push failed. Run manually: cd ${destination} && git push -u origin main`,
+      );
+      console.error(chalk.dim(`(${(err as Error).message.slice(0, 200)})`));
     }
   }
 
-  outro(chalk.green(`${a.projectName} is ready at ${a.destination}`));
+  outro(chalk.green(`${displayName} is ready`));
   console.log(
     chalk.dim(
-      `\nNext steps:\n  cd ${a.destination}\n  pnpm db:generate && pnpm db:migrate\n  pnpm dev\n`,
+      `\nNext:\n  cd ${destination}\n  # edit .env.local with real secrets\n  pnpm install\n  pnpm db:generate && pnpm db:migrate\n  pnpm dev\n`,
     ),
   );
 }
 
-async function textReq(label: string, initial = "") {
+async function askSlug() {
   const v = await text({
-    message: label,
-    initialValue: initial,
-    validate: (s) => (!s ? "required" : undefined),
+    message: "Project slug (kebab-case)",
+    initialValue: "my-app",
+    validate: (s) =>
+      !s
+        ? "required"
+        : !/^[a-z][a-z0-9-]*$/.test(s)
+          ? "lowercase letters, digits, and hyphens only"
+          : undefined,
   });
   if (isCancel(v)) {
     cancel("Cancelled");
@@ -258,32 +153,17 @@ async function textReq(label: string, initial = "") {
   return v as string;
 }
 
-async function secretReq(label: string) {
-  const v = await password({
-    message: label,
-    validate: (s) => (!s ? "required" : undefined),
+async function askGitUrl() {
+  const v = await text({
+    message: "GitHub remote URL (blank to skip push)",
+    placeholder: "https://github.com/you/repo.git",
+    initialValue: "",
   });
   if (isCancel(v)) {
     cancel("Cancelled");
     process.exit(0);
   }
-  return v as string;
-}
-
-async function boolAsk(label: string, initial: boolean) {
-  const v = await confirm({ message: label, initialValue: initial });
-  if (isCancel(v)) {
-    cancel("Cancelled");
-    process.exit(0);
-  }
-  return v as boolean;
-}
-
-function toSlug(s: string) {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
+  return (v as string) || null;
 }
 
 async function replaceInFile(file: string, pat: RegExp, repl: string) {
@@ -291,7 +171,7 @@ async function replaceInFile(file: string, pat: RegExp, repl: string) {
   await fs.writeFile(file, buf.replace(pat, repl), "utf8");
 }
 
-run().catch((e) => {
+main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
