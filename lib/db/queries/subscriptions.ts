@@ -1,16 +1,12 @@
 import "server-only";
 import { eq } from "drizzle-orm";
-import { db, subscriptions, users } from "@/db";
+import { db, subscriptions } from "@/db";
 
-export async function getSubscriptionByClerkId(clerkId: string) {
+export async function getSubscriptionByUserId(userId: string) {
   const rows = await db
-    .select({
-      subscription: subscriptions,
-      user: users,
-    })
+    .select()
     .from(subscriptions)
-    .innerJoin(users, eq(subscriptions.userId, users.id))
-    .where(eq(users.clerkId, clerkId))
+    .where(eq(subscriptions.userId, userId))
     .limit(1);
   return rows[0] ?? null;
 }

@@ -1,19 +1,21 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 
-const isProtectedRoute = createRouteMatcher([
-  "/dashboard(.*)",
-  "/chat(.*)",
-  "/billing(.*)",
-  "/settings(.*)",
-  "/api/v1/ai/(.*)",
-  "/api/v1/stripe/create-checkout(.*)",
-  "/api/v1/stripe/create-portal(.*)",
-  "/api/v1/projects(.*)",
-]);
+const PROTECTED = [
+  /^\/dashboard(\/|$)/,
+  /^\/chat(\/|$)/,
+  /^\/billing(\/|$)/,
+  /^\/settings(\/|$)/,
+  /^\/api\/v1\/ai\//,
+  /^\/api\/v1\/stripe\/(create-checkout|create-portal)/,
+  /^\/api\/v1\/projects/,
+];
 
-export default clerkMiddleware(async (auth, req) => {
-  if (isProtectedRoute(req)) {
-    await auth.protect();
+export default auth((req) => {
+  const isProtected = PROTECTED.some((re) => re.test(req.nextUrl.pathname));
+  if (isProtected && !req.auth) {
+    const url = new URL("/sign-in", req.nextUrl);
+    url.searchParams.set("callbackUrl", req.nextUrl.pathname);
+    return Response.redirect(url);
   }
 });
 

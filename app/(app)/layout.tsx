@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { UserButton } from "@clerk/nextjs";
-import { requireUser } from "@/lib/auth/clerk";
+import { requireUser } from "@/lib/auth/session";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { UserMenu } from "@/components/auth/user-menu";
 import config from "@/config";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  await requireUser();
+  const user = await requireUser();
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="border-b">
@@ -28,7 +28,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <UserButton afterSignOutUrl="/" />
+            <UserMenu user={user} />
           </div>
         </div>
       </header>

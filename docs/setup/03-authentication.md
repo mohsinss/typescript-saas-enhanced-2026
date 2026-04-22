@@ -1,290 +1,174 @@
-# 03 — Authentication (Clerk)
+# 03 — Authentication (Auth.js v5)
 
 **Phase:** 1 · **Depends on:** 01, 02 · **P0**
 
-Replaces NextAuth v4 + JWT + Google-only with Clerk. Clerk ships orgs, RBAC, MFA, social logins, magic links, session management, and billing out of the box — saves 2–3 weeks per new app.
+Auth.js v5 (the renamed NextAuth) runs entirely in your code and your Postgres. No SaaS account, no dashboard gatekeeping, no domain whitelist. Works identically on `localhost`, `*.vercel.app`, and custom domains.
 
 ## Goal
 
-- Clerk handles all auth flows (sign-in, sign-up, password reset, MFA, OAuth, magic links).
-- `ClerkProvider` wraps the app; `clerkMiddleware()` guards routes via `proxy.ts`.
-- Every Clerk user is synced into Postgres `users` via a webhook (source of truth for app-specific data stays in Postgres).
-- Server helpers (`requireUser`, `requireOrg`) for route handlers and Server Components.
+- Google sign-in (extendable to GitHub, Apple, email magic links, credentials).
+- Sessions persisted in Postgres via the Drizzle adapter.
+- `auth()` helper usable in Server Components, route handlers, and middleware.
+- Session augmented with the user's subscription `hasAccess` flag for fast client-side paywall gating.
 
 ## Stack
 
-- **`@clerk/nextjs`** (latest) — per the official docs the user provided.
-- **`svix`** — for verifying Clerk webhooks.
+- **`next-auth@beta`** — Auth.js v5.
+- **`@auth/drizzle-adapter`** — persists users, accounts, sessions, verification tokens in Postgres.
+- **Google provider** — default social login (free, no domain ownership required).
 
 ## Steps
 
-### 1. Create a Clerk application
-
-1. Sign up at https://clerk.com, create an application.
-2. Enable desired auth methods (Email, Google, GitHub, passkeys, etc.).
-3. Copy keys to `.env.local`:
-   ```
-   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_XXX
-   CLERK_SECRET_KEY=sk_test_XXX
-   ```
-4. Webhook signing secret — see step 6.
-
-### 2. Install
+### 1. Install
 
 ```bash
-pnpm add @clerk/nextjs svix
-pnpm remove next-auth @auth/mongodb-adapter bcryptjs @types/bcryptjs
+pnpm add next-auth@beta @auth/drizzle-adapter
 ```
 
-### 3. `proxy.ts` (Clerk middleware)
+### 2. Schema
 
-**Per Clerk's latest docs, the file is named `proxy.ts`, not `middleware.ts`.**
+Four tables are required by Auth.js. All four ship in `db/schema/`:
 
-Create `proxy.ts` at the repo root:
+- `users` — id, email, name, image, emailVerified, timestamps
+- `accounts` — OAuth provider linkage (one row per provider the user signed in with)
+- `sessions` — active session tokens
+- `verification_tokens` — email magic-link tokens
+
+Run the migration:
+
+```bash
+pnpm db:generate
+pnpm db:migrate
+```
+
+### 3. Env vars
+
+Add to `.env.local`:
+
+```bash
+AUTH_SECRET=...                  # 32+ random bytes, base64
+AUTH_GOOGLE_ID=...               # see step 4
+AUTH_GOOGLE_SECRET=...
+```
+
+Generate a secret with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+`AUTH_URL` is auto-detected on Vercel; set it only if you're behind a proxy locally.
+
+### 4. Google OAuth credentials
+
+1. Go to https://console.cloud.google.com/apis/credentials.
+2. Select or create a project.
+3. **OAuth consent screen** → External → add app name, support email, developer contact.
+4. **Credentials → Create Credentials → OAuth 2.0 Client ID → Web application.**
+5. **Authorized redirect URIs** — add every URL your app will run at:
+   - `http://localhost:3000/api/auth/callback/google`
+   - `https://<your-app>.vercel.app/api/auth/callback/google`
+   - `https://<your-custom-domain>/api/auth/callback/google` (if any)
+6. Copy **Client ID** → `AUTH_GOOGLE_ID`.
+7. Copy **Client Secret** → `AUTH_GOOGLE_SECRET`.
+
+### 5. Auth configuration
+
+Already written at `lib/auth.ts`:
+
+- Drizzle adapter pointed at `db`
+- `session.strategy: "database"` (invalidation + revocation work out of the box)
+- `session` callback exposes `user.id` and `user.hasAccess` on every session read
+- Custom sign-in page at `/sign-in`
+
+### 6. Middleware
+
+Already wired at `middleware.ts`. Protects `/dashboard`, `/chat`, `/billing`, `/settings`, `/api/v1/ai/*`, `/api/v1/stripe/(create-checkout|create-portal)`, `/api/v1/projects`. Unauthenticated requests redirect to `/sign-in?callbackUrl=<pathname>`.
+
+### 7. Server-side usage
 
 ```ts
-// proxy.ts
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 
-const isProtectedRoute = createRouteMatcher([
-  "/(app)(.*)",
-  "/dashboard(.*)",
-  "/api/v1/(ai|stripe/create-checkout|stripe/create-portal)(.*)",
-]);
-
-export default clerkMiddleware(async (auth, req) => {
-  if (isProtectedRoute(req)) {
-    await auth.protect();
-  }
-});
-
-export const config = {
-  matcher: [
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-    "/(api|trpc)(.*)",
-  ],
-};
-```
-
-### 4. `<ClerkProvider>` in root layout
-
-Edit `app/layout.tsx` — `<ClerkProvider>` goes **inside** `<body>`:
-
-```tsx
-// app/layout.tsx
-import { ClerkProvider } from "@clerk/nextjs";
-import { Providers } from "@/components/providers";
-import "./globals.css";
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="en" suppressHydrationWarning>
-      <body>
-        <ClerkProvider>
-          <Providers>{children}</Providers>
-        </ClerkProvider>
-      </body>
-    </html>
-  );
+export default async function Page() {
+  const session = await auth();
+  // session?.user.id, session?.user.hasAccess, session?.user.email, ...
 }
 ```
 
-### 5. Sign-in / sign-up pages
+Or the redirect-or-return helper:
 
-Clerk's `<SignIn>` / `<SignUp>` components handle the full flow. Create catch-all routes:
+```ts
+import { requireUser } from "@/lib/auth/session";
+
+export default async function Page() {
+  const user = await requireUser(); // redirects to /sign-in if absent
+  // user.id, user.email, user.hasAccess, ...
+}
+```
+
+### 8. Client-side usage
+
+The app is wrapped in `<SessionProvider>` via `components/providers.tsx`. Use the hook:
 
 ```tsx
-// app/(auth)/sign-in/[[...sign-in]]/page.tsx
-import { SignIn } from "@clerk/nextjs";
-export default function Page() { return <SignIn />; }
-```
-
-```tsx
-// app/(auth)/sign-up/[[...sign-up]]/page.tsx
-import { SignUp } from "@clerk/nextjs";
-export default function Page() { return <SignUp />; }
-```
-
-Set env vars for redirects in `.env.local`:
-
-```
-NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
-NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
-NEXT_PUBLIC_CLERK_SIGN_IN_FORCE_REDIRECT_URL=/dashboard
-NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL=/dashboard
-```
-
-Add these to `lib/env.ts` client schema.
-
-### 6. User header component
-
-Per the Clerk docs provided, use `<Show>` / `<UserButton>` / `<SignInButton>` / `<SignUpButton>`:
-
-```tsx
-// components/auth/user-button.tsx
 "use client";
-import { Show, UserButton, SignInButton, SignUpButton } from "@clerk/nextjs";
+import { useSession, signIn, signOut } from "next-auth/react";
 
-export function AuthHeader() {
-  return (
-    <div className="flex items-center gap-2">
-      <Show when="signed-out">
-        <SignInButton />
-        <SignUpButton />
-      </Show>
-      <Show when="signed-in">
-        <UserButton />
-      </Show>
-    </div>
-  );
+export function Example() {
+  const { data: session, status } = useSession();
+  if (status === "loading") return null;
+  if (!session) return <button onClick={() => signIn("google")}>Sign in</button>;
+  return <button onClick={() => signOut()}>Sign out {session.user.email}</button>;
 }
 ```
 
-**Do NOT use `<SignedIn>` / `<SignedOut>`** — those are deprecated; use `<Show when="signed-in">` / `<Show when="signed-out">`.
+### 9. Subscription state on the session
 
-### 7. Server-side helpers
-
-```ts
-// lib/auth/clerk.ts
-import "server-only";
-import { auth, currentUser } from "@clerk/nextjs/server";
-import { redirect } from "next/navigation";
-import { getUserByClerkId } from "@/lib/db/queries/users";
-
-export async function requireUser() {
-  const { userId } = await auth();
-  if (!userId) redirect("/sign-in");
-  const user = await getUserByClerkId(userId);
-  if (!user) {
-    // Webhook hasn't synced yet — fall back to Clerk data
-    const clerk = await currentUser();
-    if (!clerk) redirect("/sign-in");
-    return {
-      clerkId: clerk.id,
-      email: clerk.emailAddresses[0]?.emailAddress ?? "",
-      name: clerk.firstName ?? null,
-      imageUrl: clerk.imageUrl,
-      dbUser: null as null,
-    };
-  }
-  return { clerkId: userId, dbUser: user, email: user.email, name: user.name, imageUrl: user.imageUrl };
-}
-
-export async function getOptionalUser() {
-  const { userId } = await auth();
-  if (!userId) return null;
-  return getUserByClerkId(userId);
-}
-```
-
-### 8. Webhook — sync Clerk → Postgres
-
-In the Clerk dashboard → **Webhooks** → Add Endpoint:
-
-- URL: `https://your-app.com/api/v1/webhook/clerk`
-- Events: `user.created`, `user.updated`, `user.deleted`
-- Copy signing secret → `CLERK_WEBHOOK_SIGNING_SECRET`
-
-```ts
-// app/api/v1/webhook/clerk/route.ts
-import { headers } from "next/headers";
-import { Webhook } from "svix";
-import type { WebhookEvent } from "@clerk/nextjs/server";
-import { env } from "@/lib/env";
-import { upsertUserFromClerk, deleteUserByClerkId } from "@/lib/db/queries/users";
-import { logger } from "@/lib/logger";
-
-export async function POST(req: Request) {
-  const h = await headers();
-  const svixId = h.get("svix-id");
-  const svixTs = h.get("svix-timestamp");
-  const svixSig = h.get("svix-signature");
-  if (!svixId || !svixTs || !svixSig) {
-    return new Response("Missing svix headers", { status: 400 });
-  }
-
-  const payload = await req.text();
-  const wh = new Webhook(env.CLERK_WEBHOOK_SIGNING_SECRET);
-  let evt: WebhookEvent;
-  try {
-    evt = wh.verify(payload, { "svix-id": svixId, "svix-timestamp": svixTs, "svix-signature": svixSig }) as WebhookEvent;
-  } catch (err) {
-    logger.error({ err }, "Clerk webhook signature verification failed");
-    return new Response("Invalid signature", { status: 401 });
-  }
-
-  switch (evt.type) {
-    case "user.created":
-    case "user.updated": {
-      const d = evt.data;
-      await upsertUserFromClerk({
-        clerkId: d.id,
-        email: d.email_addresses[0]?.email_address ?? "",
-        name: [d.first_name, d.last_name].filter(Boolean).join(" ") || null,
-        imageUrl: d.image_url,
-      });
-      break;
-    }
-    case "user.deleted": {
-      if (evt.data.id) await deleteUserByClerkId(evt.data.id);
-      break;
-    }
-  }
-
-  return new Response(null, { status: 200 });
-}
-
-export const runtime = "nodejs"; // svix requires Node runtime
-```
-
-### 9. Delete NextAuth artifacts
-
-```bash
-rm -rf app/api/auth/ app/api/v1/auth/
-rm -f lib/auth/next-auth.ts
-```
-
-Search for stragglers:
-
-```bash
-rg "next-auth|getServerSession|NextAuthOptions" --type ts --type tsx
-```
-
-### 10. Protect dashboard layout
+The `session` callback in `lib/auth.ts` queries `subscriptions` and attaches `user.hasAccess` to every session read. This powers the client-side paywall without an extra API call:
 
 ```tsx
-// app/(app)/layout.tsx
-import { requireUser } from "@/lib/auth/clerk";
-
-export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  await requireUser();
-  return <div className="flex min-h-dvh flex-col">{children}</div>;
-}
+const { data: session } = useSession();
+if (!session?.user.hasAccess) return <Paywall />;
 ```
 
-### 11. Organizations (optional, but encouraged)
+## Adding more providers
 
-If any of your apps are multi-tenant / B2B, enable Clerk Organizations:
+### GitHub
 
-- Dashboard → **Organizations** → Enable.
-- Add `<OrganizationSwitcher />` to the app header.
-- Gate routes with `await auth.protect({ role: "org:admin" })` or permissions.
+```ts
+import GitHub from "next-auth/providers/github";
+GitHub({ clientId: process.env.AUTH_GITHUB_ID, clientSecret: process.env.AUTH_GITHUB_SECRET }),
+```
 
-Extend the Postgres schema with an `organizations` + `org_members` table mirroring Clerk's `organization.created` webhook events (same pattern as users above).
+Callback URL: `https://<your-domain>/api/auth/callback/github`.
+
+### Email magic links (via Resend)
+
+```ts
+import Resend from "next-auth/providers/resend";
+Resend({ apiKey: process.env.RESEND_API_KEY, from: process.env.EMAIL_FROM }),
+```
+
+Requires `RESEND_API_KEY` + `EMAIL_FROM` already set.
+
+### Credentials (email + password)
+
+Possible but not recommended — skip unless you have compliance reasons. Social + magic links cover 99% of cases.
 
 ## Verification checklist
 
-- [ ] `pnpm dev` loads, `/sign-up` shows Clerk UI.
-- [ ] After sign-up, the Clerk webhook hits `/api/v1/webhook/clerk` and a row appears in `users`.
-- [ ] `requireUser()` in `app/(app)/layout.tsx` redirects unauthenticated users to `/sign-in`.
-- [ ] `rg "next-auth"` returns zero results.
-- [ ] `<UserButton />` renders after sign-in and opens the profile modal on click.
-- [ ] Protected API route (`/api/v1/ai/chat`) returns 401 without a session, 200 with one.
+- [ ] `pnpm db:migrate` applied the four Auth.js tables.
+- [ ] `/sign-in` renders with a "Continue with Google" button.
+- [ ] Click → Google consent → redirected back, `users` row inserted.
+- [ ] `/dashboard` loads and shows the user's name.
+- [ ] `/api/v1/ai/chat` returns 401 without a session, 200 with one.
+- [ ] Signing out clears the session cookie and redirects to `/`.
 
 ## Gotchas
 
-- **`proxy.ts`, not `middleware.ts`.** The Clerk docs you're following explicitly rename this. Do not revert.
-- **`<Show>`, not `<SignedIn>`/`<SignedOut>`.** Deprecated aliases still work but throw warnings.
-- **`ClerkProvider` must be inside `<body>`,** not wrapping `<html>`. This is different from older Clerk versions.
-- **Webhook races.** A user might hit `/dashboard` before the webhook lands. The `requireUser()` helper above handles that by falling back to Clerk's data.
-- **Don't copy Clerk metadata into Postgres you don't need.** Email, name, image, id — stop there. Clerk is the source of truth for auth; Postgres for app data.
+- **Auth.js v5 is in beta.** API is stable but occasional minor breaking changes in patch releases. Pin the version if this bothers you.
+- **Google redirect URI must match EXACTLY.** Trailing slash, `http` vs `https`, port — all matter.
+- **Database sessions round-trip per request.** For ultra-high-traffic routes, switch to `session.strategy: "jwt"` (revocation becomes harder; use short expiry).
+- **Changing `AUTH_SECRET` invalidates all existing sessions.** Users have to sign in again. Fine for dev, not for prod.
+- **Adapter writes `users` row automatically on first sign-in** — no webhook needed (unlike Clerk).

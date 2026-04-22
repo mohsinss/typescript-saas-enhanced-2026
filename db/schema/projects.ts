@@ -6,7 +6,7 @@ export type ProjectStatus = (typeof PROJECT_STATUS)[number];
 
 export const projects = pgTable("projects", {
   id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 255 }).notNull(),

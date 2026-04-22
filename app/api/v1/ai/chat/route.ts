@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { streamText, convertToCoreMessages, type UIMessage } from "ai";
 import { models } from "@/lib/ai/client";
 import { systemMessage } from "@/lib/ai/prompts/system";
@@ -11,7 +11,8 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const { userId } = await auth();
+  const session = await auth();
+  const userId = session?.user?.id;
   if (!userId) return new Response("Unauthorized", { status: 401 });
 
   const { success } = await ratelimit.ai.limit(userId);

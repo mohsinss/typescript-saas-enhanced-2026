@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { z, type ZodTypeAny } from "zod";
 import { captureError } from "@/lib/logger";
@@ -30,7 +30,8 @@ export function createHandler<TIn = unknown, TOut = unknown, TParams = Record<st
     routeCtx: { params: Promise<TParams> } | { params: TParams } | undefined,
   ) => {
     try {
-      const { userId } = await auth();
+      const session = await auth();
+      const userId = session?.user?.id ?? null;
 
       if (opts.auth === "required" && !userId) {
         throw new UnauthorizedError();

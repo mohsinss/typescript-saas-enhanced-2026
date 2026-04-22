@@ -9,10 +9,11 @@ export const env = createEnv({
     DATABASE_URL: z.string().url(),
     DATABASE_URL_UNPOOLED: z.string().url().optional(),
 
-    // Clerk (doc 03)
-    CLERK_SECRET_KEY: z.string().startsWith("sk_"),
-    // Optional: only needed once you wire the Clerk webhook endpoint.
-    CLERK_WEBHOOK_SIGNING_SECRET: z.string().startsWith("whsec_").optional(),
+    // Auth.js v5 (doc 03)
+    AUTH_SECRET: z.string().min(32),
+    AUTH_GOOGLE_ID: z.string().optional(),
+    AUTH_GOOGLE_SECRET: z.string().optional(),
+    AUTH_URL: z.string().url().optional(),
 
     // AI (doc 05)
     ANTHROPIC_API_KEY: z.string().startsWith("sk-ant-"),
@@ -41,9 +42,6 @@ export const env = createEnv({
 
   client: {
     NEXT_PUBLIC_APP_URL: z.string().url(),
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().startsWith("pk_"),
-    NEXT_PUBLIC_CLERK_SIGN_IN_URL: z.string().default("/sign-in"),
-    NEXT_PUBLIC_CLERK_SIGN_UP_URL: z.string().default("/sign-up"),
     NEXT_PUBLIC_POSTHOG_KEY: z.string().startsWith("phc_").optional(),
     NEXT_PUBLIC_POSTHOG_HOST: z.string().url().default("https://us.i.posthog.com"),
     NEXT_PUBLIC_SENTRY_DSN: z.string().url().optional(),
@@ -53,8 +51,10 @@ export const env = createEnv({
     NODE_ENV: process.env.NODE_ENV,
     DATABASE_URL: process.env.DATABASE_URL,
     DATABASE_URL_UNPOOLED: process.env.DATABASE_URL_UNPOOLED,
-    CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
-    CLERK_WEBHOOK_SIGNING_SECRET: process.env.CLERK_WEBHOOK_SIGNING_SECRET,
+    AUTH_SECRET: process.env.AUTH_SECRET,
+    AUTH_GOOGLE_ID: process.env.AUTH_GOOGLE_ID,
+    AUTH_GOOGLE_SECRET: process.env.AUTH_GOOGLE_SECRET,
+    AUTH_URL: process.env.AUTH_URL,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
@@ -70,9 +70,6 @@ export const env = createEnv({
     SENTRY_ORG: process.env.SENTRY_ORG,
     SENTRY_PROJECT: process.env.SENTRY_PROJECT,
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
-    NEXT_PUBLIC_CLERK_SIGN_IN_URL: process.env.NEXT_PUBLIC_CLERK_SIGN_IN_URL,
-    NEXT_PUBLIC_CLERK_SIGN_UP_URL: process.env.NEXT_PUBLIC_CLERK_SIGN_UP_URL,
     NEXT_PUBLIC_POSTHOG_KEY: process.env.NEXT_PUBLIC_POSTHOG_KEY,
     NEXT_PUBLIC_POSTHOG_HOST: process.env.NEXT_PUBLIC_POSTHOG_HOST,
     NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,

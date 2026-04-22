@@ -1,7 +1,6 @@
 import { headers } from "next/headers";
 import type Stripe from "stripe";
 import { eq } from "drizzle-orm";
-import { clerkClient } from "@clerk/nextjs/server";
 import { requireStripe } from "@/lib/payments/stripe";
 import { env } from "@/lib/env";
 import { db, users } from "@/db";
@@ -33,9 +32,8 @@ export async function POST(req: Request) {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-        const clerkUserId =
-          session.metadata?.clerkUserId ?? (session.client_reference_id ?? null);
-        if (!clerkUserId) break;
+        const userId = session.metadata?.userId ?? session.client_reference_id ?? null;
+        if (!userId) break;
         const subId =
           typeof session.subscription === "string"
             ? session.subscription
@@ -43,7 +41,7 @@ export async function POST(req: Request) {
         if (!subId) break;
 
         const sub = await stripe.subscriptions.retrieve(subId, { expand: ["items.data.price"] });
-        await syncSubscription(clerkUserId, sub);
+        await syncSubscription(userId, sub);
 
         if (session.customer_email && env.RESEND_API_KEY) {
           await sendReceiptEmail({
@@ -54,7 +52,7 @@ export async function POST(req: Request) {
         }
 
         await capture({
-          distinctId: clerkUserId,
+          distinctId: userId,
           event: EVENTS.checkout_succeeded,
           properties: {
             amount: (session.amount_total ?? 0) / 100,
@@ -65,27 +63,31 @@ export async function POST(req: Request) {
       }
       case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
-        const clerkUserId = sub.metadata?.clerkUserId;
-        if (!clerkUserId) break;
-        await syncSubscription(clerkUserId, sub);
+        const userId = sub.metadata?.userId;
+        if (!userId) break;
+        await syncSubscription(userId, sub);
         break;
       }
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
-        const clerkUserId = sub.metadata?.clerkUserId;
-        if (!clerkUserId) break;
-        await syncSubscription(clerkUserId, sub);
+        const userId = sub.metadata?.userId;
+        if (!userId) break;
+        await syncSubscription(userId, sub);
 
-        const client = await clerkClient();
-        const clerkUser = await client.users.getUser(clerkUserId);
-        const email = clerkUser.emailAddresses[0]?.emailAddress;
-        if (email && env.RESEND_API_KEY) {
-          await sendSubscriptionCancelledEmail({ to: email }).catch((err) =>
+        const userRow = (
+          await db
+            .select({ email: users.email })
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1)
+        )[0];
+        if (userRow?.email && env.RESEND_API_KEY) {
+          await sendSubscriptionCancelledEmail({ to: userRow.email }).catch((err) =>
             captureError(err, { flow: "cancel-email" }),
           );
         }
         await capture({
-          distinctId: clerkUserId,
+          distinctId: userId,
           event: EVENTS.subscription_cancelled,
         }).catch(() => {});
         break;
@@ -104,9 +106,9 @@ export async function POST(req: Request) {
   return new Response(null, { status: 200 });
 }
 
-async function syncSubscription(clerkUserId: string, sub: Stripe.Subscription) {
+async function syncSubscription(userId: string, sub: Stripe.Subscription) {
   const userRow = (
-    await db.select({ id: users.id }).from(users).where(eq(users.clerkId, clerkUserId)).limit(1)
+    await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1)
   )[0];
   if (!userRow) return;
 
@@ -121,10 +123,5 @@ async function syncSubscription(clerkUserId: string, sub: Stripe.Subscription) {
     status: sub.status,
     hasAccess: isActive,
     currentPeriodEnd: sub.current_period_end ? new Date(sub.current_period_end * 1000) : null,
-  });
-
-  const client = await clerkClient();
-  await client.users.updateUser(clerkUserId, {
-    publicMetadata: { hasAccess: isActive, priceId, status: sub.status },
   });
 }

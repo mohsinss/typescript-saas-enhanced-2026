@@ -1,11 +1,14 @@
-import { pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
+// Schema per @auth/drizzle-adapter + Auth.js v5 expectations.
 export const users = pgTable("users", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  clerkId: varchar("clerk_id", { length: 255 }).notNull().unique(),
-  email: varchar("email", { length: 255 }).notNull().unique(),
-  name: varchar("name", { length: 255 }),
-  imageUrl: text("image_url"),
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  name: text("name"),
+  email: text("email").unique(),
+  emailVerified: timestamp("email_verified", { mode: "date", withTimezone: true }),
+  image: text("image"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

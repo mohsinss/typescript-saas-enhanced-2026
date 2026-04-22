@@ -1,10 +1,13 @@
 import Link from "next/link";
-import { SignedIn, SignedOut, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
+import { auth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { UserMenu } from "@/components/auth/user-menu";
 import config from "@/config";
 
-export default function MarketingLayout({ children }: { children: React.ReactNode }) {
+export default async function MarketingLayout({ children }: { children: React.ReactNode }) {
+  const session = await auth();
+
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="border-b">
@@ -17,20 +20,23 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
               <Link href="/pricing">Pricing</Link>
             </Button>
             <ThemeToggle />
-            <SignedOut>
-              <SignInButton>
-                <Button variant="ghost">Sign in</Button>
-              </SignInButton>
-              <SignUpButton>
-                <Button>Sign up</Button>
-              </SignUpButton>
-            </SignedOut>
-            <SignedIn>
-              <Button variant="ghost" asChild>
-                <Link href="/dashboard">Dashboard</Link>
-              </Button>
-              <UserButton afterSignOutUrl="/" />
-            </SignedIn>
+            {session?.user ? (
+              <>
+                <Button variant="ghost" asChild>
+                  <Link href="/dashboard">Dashboard</Link>
+                </Button>
+                <UserMenu user={session.user} />
+              </>
+            ) : (
+              <>
+                <Button variant="ghost" asChild>
+                  <Link href="/sign-in">Sign in</Link>
+                </Button>
+                <Button asChild>
+                  <Link href="/sign-up">Sign up</Link>
+                </Button>
+              </>
+            )}
           </nav>
         </div>
       </header>

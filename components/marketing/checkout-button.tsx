@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 
@@ -11,12 +11,12 @@ export function CheckoutButton({
   priceId: string;
   children: React.ReactNode;
 }) {
-  const { isSignedIn } = useUser();
+  const { status } = useSession();
   const [loading, setLoading] = useState(false);
 
   async function onClick() {
-    if (!isSignedIn) {
-      window.location.href = "/sign-up";
+    if (status !== "authenticated") {
+      window.location.href = `/sign-up?callbackUrl=${encodeURIComponent("/pricing")}`;
       return;
     }
     setLoading(true);

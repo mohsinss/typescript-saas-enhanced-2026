@@ -3,7 +3,7 @@ import type { ConfigProps } from "@/types/config";
 const config = {
   appName: "Magic Create",
   appDescription:
-    "A 2026 AI-SaaS boilerplate: Next.js 15, React 19, Clerk, Drizzle + Postgres + pgvector, Vercel AI SDK, Stripe, Resend.",
+    "A 2026 AI-SaaS boilerplate: Next.js 15, React 19, Auth.js v5, Drizzle + Postgres + pgvector, Vercel AI SDK, Stripe, Resend.",
   domainName: "magic-create.com",
   stripe: {
     plans: [

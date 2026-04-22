@@ -21,7 +21,7 @@ A 2026 state-of-the-art AI-SaaS boilerplate built to spin up new web apps in min
 ## Stack
 
 - **Next.js 15** (App Router) · **React 19** · **TypeScript 5.7**
-- **Clerk** — auth, orgs, RBAC, MFA, social logins
+- **Auth.js v5 (NextAuth)** — Google OAuth, database sessions via Drizzle, zero vendor lock-in
 - **Postgres (Neon) + Drizzle + pgvector** — typed SQL, RAG-ready
 - **Vercel AI SDK + Anthropic Claude** — streaming, tool-use, prompt caching
 - **shadcn/ui + Tailwind** — component system you own
@@ -41,7 +41,7 @@ A 2026 state-of-the-art AI-SaaS boilerplate built to spin up new web apps in min
 | **pnpm** | 9+ | Required (do NOT use npm — `package.json` pins pnpm) |
 | **git** | any | Required |
 | **Neon account** | free | Postgres host |
-| **Clerk account** | free | Auth |
+| **Google Cloud project** | free | OAuth credentials for Auth.js |
 | **Anthropic account** | pay-as-you-go | AI |
 
 Install pnpm if you don't have it:
@@ -88,15 +88,15 @@ All env vars are validated at **build time** via `@t3-oss/env-nextjs` in [`lib/e
 | `NEXT_PUBLIC_APP_URL` | your URL | `http://localhost:3000` / `https://my-app.vercel.app` |
 | `DATABASE_URL` | Neon dashboard → Connection string (pooled) | `postgresql://...@host-pooler.neon.tech/db?sslmode=require` |
 | `DATABASE_URL_UNPOOLED` | Neon dashboard → Connection string (direct) | `postgresql://...@host.neon.tech/db?sslmode=require` |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk dashboard → API Keys | `pk_test_...` |
-| `CLERK_SECRET_KEY` | Clerk dashboard → API Keys | `sk_test_...` |
+| `AUTH_SECRET` | Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` | `ryw/S55F...` (32+ bytes base64) |
 | `ANTHROPIC_API_KEY` | console.anthropic.com → API Keys | `sk-ant-api03-...` |
 
 ### Recommended (features silently disabled otherwise)
 
 | Variable | Feature | Where to get it |
 |----------|---------|-----------------|
-| `CLERK_WEBHOOK_SIGNING_SECRET` | Sync Clerk users → Postgres | Clerk dashboard → Webhooks → Add Endpoint |
+| `AUTH_GOOGLE_ID` | Google sign-in | console.cloud.google.com → Credentials → OAuth 2.0 Client ID |
+| `AUTH_GOOGLE_SECRET` | Same | Same |
 | `OPENAI_API_KEY` | Embeddings for RAG | platform.openai.com |
 | `STRIPE_SECRET_KEY` | Subscriptions / billing | Stripe dashboard → Developers → API keys |
 | `STRIPE_WEBHOOK_SECRET` | Subscription state sync | Stripe dashboard → Developers → Webhooks |
@@ -151,18 +151,26 @@ pnpm new-project <slug> <git-url>    # Clone this boilerplate to a new repo
 
 ## Provisioning accounts
 
-### Clerk (auth)
+### Auth.js v5 (auth)
 
-1. Sign up at https://dashboard.clerk.com.
-2. Create an application. Enable Email + Google.
-3. Copy `pk_test_...` → `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`.
-4. Copy `sk_test_...` → `CLERK_SECRET_KEY`.
-5. **Webhook (optional, recommended):** Dashboard → Webhooks → Add Endpoint.
-   - URL: `https://<your-domain>/api/v1/webhook/clerk`
-   - Events: `user.created`, `user.updated`, `user.deleted`
-   - Copy signing secret → `CLERK_WEBHOOK_SIGNING_SECRET`.
+Auth.js lives in your own code + Postgres. No SaaS account, no dashboard, no domain approval — works on `localhost`, `*.vercel.app`, or any custom domain.
 
-For local webhook testing, use a tunnel (`ngrok http 3000` or `cloudflared tunnel --url http://localhost:3000`).
+1. Generate a secret:
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   ```
+   Paste the output into `AUTH_SECRET` in `.env.local`.
+
+2. Create Google OAuth credentials at https://console.cloud.google.com/apis/credentials:
+   - **Create Credentials → OAuth 2.0 Client ID** → Web application.
+   - **Authorized redirect URIs**: add every URL that will run your app
+     - `http://localhost:3000/api/auth/callback/google`
+     - `https://<your-app>.vercel.app/api/auth/callback/google`
+     - `https://<your-custom-domain>/api/auth/callback/google` (if any)
+   - Copy Client ID → `AUTH_GOOGLE_ID`.
+   - Copy Client Secret → `AUTH_GOOGLE_SECRET`.
+
+3. First time you sign in, Auth.js creates a `users` row automatically via the Drizzle adapter — no webhook needed.
 
 ### Neon (Postgres)
 
@@ -244,13 +252,13 @@ Then:
 
 ```bash
 cd /Users/you/<slug>
-# Edit .env.local with secrets (Clerk, Neon, Anthropic required)
+# Edit .env.local with secrets (Auth.js, Neon, Anthropic required)
 pnpm install
 pnpm db:generate && pnpm db:migrate
 pnpm dev
 ```
 
-**Create a new Clerk app and new Neon project per app** — don't share auth/DB across projects. Anthropic and OpenAI keys can be reused.
+**Create a new Neon project and fresh Google OAuth client per app** — don't share auth/DB across projects. Anthropic, OpenAI, Resend, Upstash, and PostHog keys can be reused.
 
 Running `pnpm new-project` with no args gives interactive prompts for slug + URL.
 
@@ -262,7 +270,7 @@ Running `pnpm new-project` with no args gives interactive prompts for slug + URL
 4. Build command: `pnpm build` (default).
 5. **Environment Variables** → paste every entry from your `.env.local` (or the Required + Recommended lists above). Scope to **Production**, **Preview**, and **Development** as appropriate.
 6. Update `NEXT_PUBLIC_APP_URL` to your Vercel URL.
-7. In Clerk dashboard → **Domains**, add your Vercel production + preview URLs.
+7. In Google Cloud Console → your OAuth client, add `https://<your-vercel-url>/api/auth/callback/google` to Authorized redirect URIs.
 8. Deploy.
 
 ### Neon + Vercel integration
@@ -297,15 +305,15 @@ A required env var is missing. Check `.env.local` matches the Required table abo
 
 ### `pnpm build` fails at "Collecting page data"
 
-Usually a missing env var manifesting later than the validation phase (e.g. Clerk trying to init with an invalid `pk_test_...`). Double-check the Clerk publishable key is real, not the literal string `REPLACE_ME`.
+Usually a missing env var manifesting later than the validation phase. Double-check `AUTH_SECRET` is set and real, and `DATABASE_URL` points at a live Neon project.
 
 ### Neon "password authentication failed"
 
 Your connection string is stale. Re-copy from Neon dashboard; Neon rotates passwords when you reset them.
 
-### Clerk preview URLs bounce
+### Google sign-in "redirect_uri_mismatch"
 
-Add every Vercel preview domain pattern to Clerk → Domains → Satellite domains, or use Clerk's development environment with wildcard support.
+Go to Google Cloud Console → your OAuth client → add the exact URL Auth.js is redirecting to (the error message shows it) to Authorized redirect URIs. Format: `<origin>/api/auth/callback/google`.
 
 ### Drizzle "relation users does not exist"
 

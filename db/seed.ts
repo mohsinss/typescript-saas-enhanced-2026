@@ -13,7 +13,7 @@ async function main() {
   await db
     .insert(schema.users)
     .values({
-      clerkId: "user_seed_dev",
+      id: "seed-dev-user",
       email: "dev@example.com",
       name: "Dev Seed",
     })

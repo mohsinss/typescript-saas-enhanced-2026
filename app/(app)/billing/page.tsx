@@ -1,5 +1,5 @@
-import { requireUser } from "@/lib/auth/clerk";
-import { getSubscriptionByClerkId } from "@/lib/db/queries/subscriptions";
+import { requireUser } from "@/lib/auth/session";
+import { getSubscriptionByUserId } from "@/lib/db/queries/subscriptions";
 import { BillingActions } from "@/components/billing-actions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,7 @@ export const metadata = { title: "Billing" };
 
 export default async function BillingPage() {
   const user = await requireUser();
-  const sub = await getSubscriptionByClerkId(user.clerkId);
+  const sub = user.id ? await getSubscriptionByUserId(user.id) : null;
 
   return (
     <div className="container max-w-2xl py-10">
@@ -19,15 +19,13 @@ export default async function BillingPage() {
           <CardTitle className="flex items-center gap-2">
             Subscription
             {sub ? (
-              <Badge variant={sub.subscription.hasAccess ? "default" : "secondary"}>
-                {sub.subscription.status}
-              </Badge>
+              <Badge variant={sub.hasAccess ? "default" : "secondary"}>{sub.status}</Badge>
             ) : (
               <Badge variant="secondary">none</Badge>
             )}
           </CardTitle>
           <CardDescription>
-            {sub?.subscription.hasAccess
+            {sub?.hasAccess
               ? "You have active access."
               : "Subscribe to unlock premium features."}
           </CardDescription>
