@@ -30,6 +30,8 @@
     "email:dev": "email dev --dir emails",
     "email:export": "email export --dir emails --out .email-export",
     "new-project": "tsx scripts/new-project.ts",
+    "test:neon": "tsx scripts/test-neon.ts",
+    "test:github": "tsx scripts/test-github.ts",
     "prepare": "husky"
   },
   "dependencies": {
